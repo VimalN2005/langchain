@@ -2473,3 +2473,72 @@ class TestSummarizationStreamingEndToEnd:
             texts.append(text)
 
         assert texts == ["Final answer."]
+
+
+def test_summarization_fallback_when_human_message_outside_trim_window() -> None:
+    """Test summarization fallback when HumanMessage is outside the trim window.
+
+    When a conversation has a long tool loop pushing HumanMessage outside the
+    trim_tokens_to_summarize window, trimming falls back without start_on='human'
+    so summarization still succeeds instead of returning an empty list (#41146).
+    """
+    calls = []
+
+    class SpyModel(GenericFakeChatModel):
+        def _generate(self, *args: Any, **kwargs: Any) -> Any:
+            calls.append(1)
+            return super()._generate(*args, **kwargs)
+
+    messages: list[AnyMessage] = [
+        HumanMessage("Initial user instruction."),
+    ]
+    for i in range(40):
+        messages.append(
+            AIMessage("", tool_calls=[{"name": "search", "args": {"q": str(i)}, "id": f"call_{i}"}])
+        )
+        messages.append(
+            ToolMessage("result: " + "detailed response data " * 30, tool_call_id=f"call_{i}")
+        )
+
+    middleware = SummarizationMiddleware(
+        model=SpyModel(messages=iter([AIMessage("Summary of tool actions")])),
+        trigger=("tokens", 2000),
+        keep=("messages", 5),
+    )
+
+    result = middleware.before_model({"messages": messages}, None)  # type: ignore[arg-type]
+    assert result is not None
+    assert len(calls) == 1
+    assert "Summary of tool actions" in result["messages"][1].content
+
+
+async def test_summarization_fallback_when_human_message_outside_trim_window_async() -> None:
+    """Async variant verifying abefore_model with HumanMessage outside trim window (#41146)."""
+    calls = []
+
+    class SpyModel(GenericFakeChatModel):
+        async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
+            calls.append(1)
+            return await super()._agenerate(*args, **kwargs)
+
+    messages: list[AnyMessage] = [
+        HumanMessage("Initial user instruction."),
+    ]
+    for i in range(40):
+        messages.append(
+            AIMessage("", tool_calls=[{"name": "search", "args": {"q": str(i)}, "id": f"call_{i}"}])
+        )
+        messages.append(
+            ToolMessage("result: " + "detailed response data " * 30, tool_call_id=f"call_{i}")
+        )
+
+    middleware = SummarizationMiddleware(
+        model=SpyModel(messages=iter([AIMessage("Async summary of tool actions")])),
+        trigger=("tokens", 2000),
+        keep=("messages", 5),
+    )
+
+    result = await middleware.abefore_model({"messages": messages}, None)  # type: ignore[arg-type]
+    assert result is not None
+    assert len(calls) == 1
+    assert "Async summary of tool actions" in result["messages"][1].content

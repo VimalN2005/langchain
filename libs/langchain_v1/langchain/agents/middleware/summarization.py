@@ -943,17 +943,27 @@ class SummarizationMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, R
         try:
             if self.trim_tokens_to_summarize is None:
                 return messages
-            return cast(
-                "list[AnyMessage]",
-                trim_messages(
+            trimmed = trim_messages(
+                messages,
+                max_tokens=self.trim_tokens_to_summarize,
+                token_counter=self.token_counter,
+                start_on="human",
+                strategy="last",
+                allow_partial=True,
+                include_system=True,
+            )
+            if not trimmed and messages:
+                # If trimming with start_on="human" returns empty (e.g., long tool-call sequences
+                # where the only HumanMessage is outside the trim window), fall back to trimming
+                # without start_on so messages can still be summarized.
+                trimmed = trim_messages(
                     messages,
                     max_tokens=self.trim_tokens_to_summarize,
                     token_counter=self.token_counter,
-                    start_on="human",
                     strategy="last",
                     allow_partial=True,
                     include_system=True,
-                ),
-            )
+                )
+            return cast("list[AnyMessage]", trimmed)
         except Exception:
             return messages[-_DEFAULT_FALLBACK_MESSAGE_COUNT:]
